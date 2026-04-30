@@ -179,29 +179,30 @@ async def save_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
 
     if message:
-        origin = message.forward_origin
-        if origin:
-            if origin.type == "user":
-                username = origin.sender_user.first_name
-            elif origin.type == "hidden_user":
-                username = origin.sender_user_name  # только строка
-            elif origin.type in ["chat", "channel"]:
-                username = origin.chat.title
+        if message.text:
+            origin = message.forward_origin
+            if origin:
+                if origin.type == "user":
+                    username = origin.sender_user.first_name
+                elif origin.type == "hidden_user":
+                    username = origin.sender_user_name  # только строка
+                elif origin.type in ["chat", "channel"]:
+                    username = origin.chat.title
+                else:
+                    username = "Anonim"
             else:
-                username = "Anonim"
-        else:
-            username = message.from_user.first_name
+                username = message.from_user.first_name
 
-        text = encrypt(message.text)
-        chat_id = message.chat.id
-        date = message.date.strftime('%Y-%m-%d %H:%M:%S')
+            text = encrypt(message.text)
+            chat_id = message.chat.id
+            date = message.date.strftime('%Y-%m-%d %H:%M:%S')
 
-        connection = sqlite3.connect("messages.db")
-        crsr = connection.cursor()
-        sql_command = f"""INSERT INTO messages VALUES ({chat_id}, "{username}","{text}","{date}");"""
-        crsr.execute(sql_command)
-        connection.commit()
-        connection.close()
+            connection = sqlite3.connect("messages.db")
+            crsr = connection.cursor()
+            sql_command = f"""INSERT INTO messages VALUES ({chat_id}, "{username}","{text}","{date}");"""
+            crsr.execute(sql_command)
+            connection.commit()
+            connection.close()
 
 
 def main():
