@@ -178,20 +178,17 @@ async def save_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if message:
         origin = message.forward_origin
-
         if origin:
             if origin.type == "user":
-                username = origin.sender_user.username or origin.sender_user.first_name
-
+                username = origin.sender_user.first_name
             elif origin.type == "hidden_user":
                 username = origin.sender_name  # только строка
-
             elif origin.type in ["chat", "channel"]:
                 username = origin.chat.title
             else:
                 username = "Anonim"
         else:
-            username = message.from_user.full_name.split(" ")[0]
+            username = message.from_user.first_name
 
         print(username)
 
