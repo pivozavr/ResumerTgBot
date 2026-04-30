@@ -182,6 +182,8 @@ async def save_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             username = message.from_user.full_name.split(" ")[0]
 
+        print(username)
+
         text = encrypt(message.text)
         chat_id = message.chat.id
         date = message.date.strftime('%Y-%m-%d %H:%M:%S')
