@@ -86,7 +86,7 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = int(context.args[1])
         curency = context.args[2]
 
-        dt = datetime.datetime.now() - datetime.timedelta(
+        dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
             seconds=amount * curencys[curency]
         )
 
@@ -111,7 +111,9 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ORDER BY date ASC;
         """, (chat_id,))
 
+
     rows = crsr.fetchall()
+
     connection.close()
 
     messages = "\n".join(
@@ -182,15 +184,13 @@ async def save_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if origin.type == "user":
                 username = origin.sender_user.first_name
             elif origin.type == "hidden_user":
-                username = origin.sender_name  # только строка
+                username = origin.sender_user_name  # только строка
             elif origin.type in ["chat", "channel"]:
                 username = origin.chat.title
             else:
                 username = "Anonim"
         else:
             username = message.from_user.first_name
-
-        print(username)
 
         text = encrypt(message.text)
         chat_id = message.chat.id
