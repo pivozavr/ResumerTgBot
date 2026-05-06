@@ -51,9 +51,17 @@ async def generate_with_retry(client, prompt, retries=5):
             )
             return response.text
 
-        except ServerError as e:
+
+        except Exception as e:
+
+            error_text = str(e)
+
+            if "RESOURCE_EXHAUSTED" in error_text or "429" in error_text or "quota" in error_text.lower():
+                return "ОПА! Превышен лимит токенов/квоты API. Запрос временно недоступен."
+
+
             if attempt == retries - 1:
-                raise e
+                return "ОПА! Ошибка после всех попыток. Запрос не выполнен."
 
             wait = 2 ** attempt  # экспоненциальная задержка
             await asyncio.sleep(wait)
