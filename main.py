@@ -197,7 +197,7 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if rows == []:
         text = "Не было найдено сообщений"
         if update.message.is_topic_message:
-            await context.bot.delete_message(chat_id=chat_id, message_thread_id=message_thread_id, message_id=temp_msg.message_id)
+            await context.bot.delete_message(chat_id=chat_id, message_id=temp_msg.message_id)
             return await context.bot.send_message(chat_id=chat_id, text=text, message_thread_id=message_thread_id,
                                            parse_mode=ParseMode.HTML)
         else:
@@ -233,7 +233,7 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = re.sub(r"__(.*?)__", r"<i>\1</i>", text)
 
     if update.message.is_topic_message:
-        await context.bot.delete_message(chat_id=chat_id, message_thread_id=message_thread_id, message_id=temp_msg.message_id)
+        await context.bot.delete_message(chat_id=chat_id, message_id=temp_msg.message_id)
         await context.bot.send_message(chat_id=chat_id, text=text, message_thread_id=message_thread_id, parse_mode=ParseMode.HTML)
     else:
         await context.bot.delete_message(chat_id=chat_id,message_id=temp_msg.message_id)

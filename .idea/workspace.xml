@@ -4,8 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ba405220-30d7-4115-8029-c0d6f54c3da8" name="Changes" comment="pre big test">
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
+    <list default="true" id="ba405220-30d7-4115-8029-c0d6f54c3da8" name="Changes" comment="pre big test final">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -148,7 +148,15 @@
       <option name="project" value="LOCAL" />
       <updated>1778083852977</updated>
     </task>
-    <option name="localTasksCounter" value="11" />
+    <task id="LOCAL-00011" summary="pre big test final">
+      <option name="closed" value="true" />
+      <created>1778084416141</created>
+      <option name="number" value="00011" />
+      <option name="presentableId" value="LOCAL-00011" />
+      <option name="project" value="LOCAL" />
+      <updated>1778084416141</updated>
+    </task>
+    <option name="localTasksCounter" value="12" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
@@ -157,6 +165,7 @@
     <MESSAGE value="now logs only messages with text" />
     <MESSAGE value="check commit" />
     <MESSAGE value="pre big test" />
-    <option name="LAST_COMMIT_MESSAGE" value="pre big test" />
+    <MESSAGE value="pre big test final" />
+    <option name="LAST_COMMIT_MESSAGE" value="pre big test final" />
   </component>
 </project>
