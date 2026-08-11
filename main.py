@@ -330,7 +330,7 @@ async def toggle_auto_summary(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         # Если выключена — включаем на 23:00 каждый день
         # Укажите ваш часовой пояс (например, MSK: UTC+3)
-        target_time = datetime.time(hour=23, minute=0, second=0, tzinfo=datetime.timezone(datetime.timedelta(hours=3)))
+        target_time = datetime.time(hour=23, minute=0, second=0, tzinfo=datetime.timezone(datetime.timedelta(hours=2)))
 
         context.job_queue.run_daily(
             scheduled_daily_summary,
@@ -532,46 +532,54 @@ async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, c
 
     # --- Выборка из БД ---
     if amount_param == "drama":
-        # 1. Находим точное время начала последнего срача
-        # Ищем первое сообщение (начиная с самых свежих), перед которым пауза между сообщениями была > 1800 сек
+        MIN_MESSAGES_FOR_DRAMA = 50  # Порог: минимум сообщений для признания срача (можно поставить 40 или 50)
+        MAX_GAP_SECONDS = 900  # Максимальная пауза внутри срача: 15 минут (900 сек)
+
+        # 1. Забираем последние 1000 сообщений с временными метками
         crsr.execute("""
-                WITH Ranked AS (
-                    SELECT 
-                        date,
-                        LAG(date) OVER (ORDER BY date DESC) AS newer_date
-                    FROM messages
-                    WHERE chat_id = ? AND message_thread_id = ?
-                )
-                SELECT date 
-                FROM Ranked 
-                WHERE (strftime('%s', newer_date) - strftime('%s', date)) > 1800
-                LIMIT 1;
+                SELECT *, strftime('%s', date) as ts
+                FROM messages
+                WHERE chat_id = ? AND message_thread_id = ?
+                ORDER BY date DESC
+                LIMIT 1000;
             """, (chat_id, message_thread_id))
 
-        boundary = crsr.fetchone()
+        raw_rows = crsr.fetchall()
 
-        # 2. Забираем ВСЕ сообщения от этой границы до текущего момента
-        if boundary:
-            start_date = boundary[0]
-            crsr.execute("""
-                    SELECT *
-                    FROM messages
-                    WHERE chat_id = ?
-                        AND message_thread_id = ?
-                        AND date >= ?
-                    ORDER BY date ASC;
-                """, (chat_id, message_thread_id, start_date))
+        if not raw_rows:
+            rows = []
         else:
-            # Если пауз вообще не было (вся история — один сплошной поток), берем всё
-            crsr.execute("""
-                    SELECT *
-                    FROM messages
-                    WHERE chat_id = ?
-                        AND message_thread_id = ?
-                    ORDER BY date ASC;
-                """, (chat_id, message_thread_id))
+            # 2. Группируем сообщения по сессиям (блоки с паузами < 15 мин)
+            sessions = []
+            current_session = [raw_rows[0]]
 
-        rows = crsr.fetchall()
+            for i in range(len(raw_rows) - 1):
+                # Считаем разницу между текущим и следующим (более старым) сообщением
+                # Предполагается, что 'ts' — это последний элемент в кортеже row
+                curr_ts = int(raw_rows[i][-1])
+                prev_ts = int(raw_rows[i + 1][-1])
+
+                if (curr_ts - prev_ts) <= MAX_GAP_SECONDS:
+                    current_session.append(raw_rows[i + 1])
+                else:
+                    sessions.append(current_session)
+                    current_session = [raw_rows[i + 1]]
+
+            if current_session:
+                sessions.append(current_session)
+
+            # 3. Ищем ПЕРВУЮ (самую свежую) сессию, которая набрала нужный объем сообщений
+            found_session = None
+            for sess in sessions:
+                if len(sess) >= MIN_MESSAGES_FOR_DRAMA:
+                    found_session = sess
+                    break
+
+            # 4. Если нашли жирный срач — берем его. Если нет — берем просто последнюю сессию.
+            target_session = found_session if found_session else sessions[0]
+
+            # Разворачиваем сообщения обратно от старых к новым для нормального чтения промптом
+            rows = list(reversed(target_session))
 
     elif amount_param in ["2h", "1d"]:
         hours = 2 if amount_param == "2h" else 24

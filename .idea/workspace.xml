@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ba405220-30d7-4115-8029-c0d6f54c3da8" name="Changes" comment="prompt renewed, added blockquote">
+    <list default="true" id="ba405220-30d7-4115-8029-c0d6f54c3da8" name="Changes" comment="new prompts, better selection">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
     </list>
@@ -174,7 +174,15 @@
       <option name="project" value="LOCAL" />
       <updated>1779103404935</updated>
     </task>
-    <option name="localTasksCounter" value="14" />
+    <task id="LOCAL-00014" summary="new prompts, better selection">
+      <option name="closed" value="true" />
+      <created>1786300777005</created>
+      <option name="number" value="00014" />
+      <option name="presentableId" value="LOCAL-00014" />
+      <option name="project" value="LOCAL" />
+      <updated>1786300777005</updated>
+    </task>
+    <option name="localTasksCounter" value="15" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
@@ -185,6 +193,7 @@
     <MESSAGE value="pre big test" />
     <MESSAGE value="pre big test final" />
     <MESSAGE value="prompt renewed, added blockquote" />
-    <option name="LAST_COMMIT_MESSAGE" value="prompt renewed, added blockquote" />
+    <MESSAGE value="new prompts, better selection" />
+    <option name="LAST_COMMIT_MESSAGE" value="new prompts, better selection" />
   </component>
 </project>
