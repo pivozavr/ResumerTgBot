@@ -310,6 +310,60 @@ async def scheduled_daily_summary(context: ContextTypes.DEFAULT_TYPE):
 from telegram.ext import CommandHandler
 
 
+async def send_split_message(context, chat_id: int, message_thread_id: int, text: str, reply_markup=None):
+    """
+    Универсальная безопасная отправка сообщений.
+    Автоматически учитывает топики супергрупп и разбивает длинный текст.
+    """
+    MAX_LENGTH = 4000
+
+    # Нормализуем thread_id для супергрупп/топиков (-1 или None отсекаем)
+    thread_id = message_thread_id if message_thread_id and message_thread_id != -1 else None
+
+    # Если текст короче лимита — отправляем сразу с клавиатурой
+    if len(text) <= MAX_LENGTH:
+        kwargs = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": ParseMode.HTML,
+            "reply_markup": reply_markup
+        }
+        if thread_id is not None:
+            kwargs["message_thread_id"] = thread_id
+
+        await context.bot.send_message(**kwargs)
+        return
+
+    # Если текст длиннее 4000 символов — режем по абзацам (\n)
+    lines = text.split("\n")
+    chunks = []
+    current_chunk = ""
+
+    for line in lines:
+        if len(current_chunk) + len(line) + 1 > MAX_LENGTH:
+            chunks.append(current_chunk)
+            current_chunk = line + "\n"
+        else:
+            current_chunk += line + "\n"
+
+    if current_chunk.strip():
+        chunks.append(current_chunk)
+
+    # Отправляем куски по очереди (клавиатуру прикрепляем к последнему куску)
+    for i, chunk in enumerate(chunks):
+        is_last = (i == len(chunks) - 1)
+        kwargs = {
+            "chat_id": chat_id,
+            "text": chunk,
+            "parse_mode": ParseMode.HTML,
+            "reply_markup": reply_markup if is_last else None
+        }
+        if thread_id is not None:
+            kwargs["message_thread_id"] = thread_id
+
+        await context.bot.send_message(**kwargs)
+
+
 async def toggle_auto_summary(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     is_topic = update.message.is_topic_message
@@ -456,16 +510,7 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     reply_markup = build_keyboard("cynic", "50", "1")
 
-    if is_topic:
-        await context.bot.send_message(
-            chat_id=chat_id, text=menu_text, message_thread_id=message_thread_id,
-            reply_markup=reply_markup, parse_mode=ParseMode.HTML
-        )
-    else:
-        await context.bot.send_message(
-            chat_id=chat_id, text=menu_text,
-            reply_markup=reply_markup, parse_mode=ParseMode.HTML
-        )
+    await send_split_message(context, chat_id, message_thread_id, menu_text, reply_markup)
 
 
 # 🔹 2. ОБРАБОТЧИК НАЖАТИЙ НА КНОПКИ (Callback Query)
