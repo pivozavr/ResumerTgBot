@@ -1,12 +1,11 @@
 import asyncio
 import random
-import time
-from google.genai.errors import ServerError
-from telegram import Update, InlineQueryResultArticle, InputTextMessageContent, InlineKeyboardButton, \
-    InlineKeyboardMarkup
+
+import ollama
+from ollama import chat, ChatResponse
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler, InlineQueryHandler, \
-    CallbackQueryHandler
+from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler, CallbackQueryHandler, MessageReactionHandler
 import sqlite3
 from google import genai
 import datetime
@@ -15,9 +14,6 @@ import re
 import os
 from cryptography.fernet import Fernet
 import html
-
-
-
 
 load_dotenv()
 
@@ -29,11 +25,11 @@ cipher = Fernet(key)
 client = genai.Client(api_key=api_key)
 app = ApplicationBuilder().token(bot_token).build()
 
-difs = {1: "Кратко (только суть)", 2: "Средне (с аргументами)", 3: "Подробно (с разбором каждой темы)"}
+difs = {1: "Кратко (то суть)", 2: "Средне (с аргументами)", 3: "Подробно (с разбором каждой темы)"}
 currencies = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 
 PROMPTS = {
-"psychologist": """Роль: Ты — осознанная гештальт-абьюзолог и диванный психотерапевт. Твоя задача — провести глубокий психоанализ произошедшего срача и выдать всем участникам диагнозы.
+    "psychologist": """Роль: Ты — осознанная гештальт-абьюзолог и диванный психотерапевт. Твоя задача — провести глубокий психоанализ произошедшего срача и выдать всем участникам диагнозы.
 
 Правила стиля:
 - ОБЯЗАТЕЛЬНОЕ НАЧАЛО: Каждую сводку НАЧИНАЙ с того, что тебя зовут ЯНА, и ты КАТЕГОРИЧЕСКИ НЕ ЖАННА! Придумывай каждый раз новую нервную вариацию (например: «Здравствуйте, я Яна! Запомните уже, НЕ ЖАННА!», «С вами психолог Яна. И если вы опять назовете меня Жанной — это ваша непроработанная проекция!», «Я Яна (и не дай бог кто-то снова скажет "Жанна")…»).
@@ -65,7 +61,7 @@ PROMPTS = {
 - Начинай фразой: "Дамы и господа, это был невероятный матч!"
 - Подведи итог: кто забрал кубок, а кто вылетел из турнирной таблицы.""",
 
-"standup": """Роль: Ты — острый на язык стендап-комик. Переписка в чате для тебя — это готовый материал для комедийного спешла.
+    "standup": """Роль: Ты — острый на язык стендап-комик. Переписка в чате для тебя — это готовый материал для комедийного спешла.
 
 Правила стиля:
 - Используй структуру стендап-комедии: сетап (суть ситуации) -> разгон -> панчлайн (смешной вывод/выходка).
@@ -140,8 +136,65 @@ PROMPTS = {
 - Не усиливай эмоциональную окраску высказываний"""
 }
 
-# Временное хранилище выборов пользователей для меню
 USER_SETTINGS = {}
+
+STYLES_CONFIG = {
+    "base": {
+        "name": "📜 Базовый",
+        "desc": "Четкий и структурированный пересказ фактов без воды.",
+        "tier": "free"
+    },
+    "cynic": {
+        "name": "😈 Циник",
+        "desc": "Едкий, ехидный и беспощадный разбор вашего общения.",
+        "tier": "pro"
+    },
+    "war": {
+        "name": "⚔️ Военный отчет",
+        "desc": "Сводка с фронтов чата в стиле оперативного штаба.",
+        "tier": "pro"
+    },
+    "sport": {
+        "name": "⚽ Спортивный матч",
+        "desc": "Энергичный репортаж с комментариями матча вашей активности.",
+        "tier": "pro"
+    },
+    "standup": {
+        "name": "🎤 Стендап",
+        "desc": "Выступление комика с прожаркой самых ярких сообщений.",
+        "tier": "pro"
+    },
+    "kanevsky": {
+        "name": "🕵️ Каневский",
+        "desc": "Легендарный детективный тон: «Но это уже совсем другая история...»",
+        "tier": "pro"
+    },
+    "drunk": {
+        "name": "🍺 Алконавт",
+        "desc": "Пересказ так, будто историю рассказывают за соседним столом.",
+        "tier": "pro"
+    },
+    "bimbo": {
+        "name": "💅 Девачки",
+        "desc": "Максимально гламурный и поверхностный взгляд на происходящее.",
+        "tier": "free"
+    },
+    "grandpa": {
+        "name": "👴 Дед ворчит",
+        "desc": "Бормотание про то, «как раньше было лучше», с кучей баек.",
+        "tier": "pro"
+    },
+    "soviet": {
+        "name": "☭ Сов. протокол",
+        "desc": "Строгая партийная сводка достижений пятилетки флуда.",
+        "tier": "pro"
+    },
+    "psychologist": {
+        "name": "🧠 Психолог Яна (НЕ ЖАННА!)",
+        "desc": "Глубокий разбор скрытых травм, мотивов и токсичности чата.",
+        "tier": "pro"
+    }
+}
 
 STYLES_MAP = {
     "cynic": "😈 Циник",
@@ -171,9 +224,57 @@ DIF_MAP = {
     "3": "3 - Подробно"
 }
 
+HELP_TEXTS = {
+    "help_main": (
+        "<b>📖 Справочник «Бот-Летописец»</b>\n\n"
+        "Я умею анализировать историю вашего чата и собирать крутые выжимки, чтобы вы не читали тысячи пропущенных сообщений.\n\n"
+        "<b>Основные команды:</b>\n"
+        "• <code>/resume</code> — вызвать меню выбора сводки прямо в чате.\n"
+        "• <code>/help</code> — открыть это интерактивное меню.\n"
+        "• <code>/auto_summary</code> — включить/выключить авто-сводки (если доступно).\n\n"
+        "💡 <i>Просто вызовите команду /resume в группе или топике, выберите стиль, глубину анализа — и наслаждайтесь результатом!</i>"
+    ),
+    "help_styles": (
+        "<b>🎭 Стили общения и рассказчики</b>\n\n"
+        "Вы можете выбрать, в каком стиле будет написана выжимка:\n"
+        "• 🏙 <b>Базовый / Сухой</b> — классический структурированный пересказ фактов.\n"
+        "• 😈 <b>Циник</b> — едкий, ироничный разбор того, чем вы тут занимались.\n"
+        "• 🥃 <i>(И другие уникальные персонажи)</i> — от психолога до неформальных рассказчиков.\n\n"
+        "✨ Позже здесь появится разделение на бесплатные стили и PRO-персонажи."
+    ),
+    "help_privacy": (
+        "<b>🔒 Безопасность и Анонимность</b>\n\n"
+        "• Бот собирает сообщения только для формирования текущих сводок.\n"
+        "• Настроено автоматическое удаление старых данных по TTL (через 7 дней).\n"
+        "• В разработке находится <b>Анонимный режим через ЛС (Шаг 3)</b>, чтобы делать запросы тихо, без спама в общий чат."
+    )
+}
+
+
+def get_help_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📖 О боте и командах", callback_data="help_main")],
+        [InlineKeyboardButton("🎭 Стили и персонажи", callback_data="help_styles")],
+        [InlineKeyboardButton("🔒 Приватность и ЛС", callback_data="help_privacy")],
+        [InlineKeyboardButton("❌ Закрыть", callback_data="help_close")]
+    ])
+
+
+def get_style_selection_keyboard(current_style="base"):
+    keyboard = []
+    for key, data in STYLES_CONFIG.items():
+        is_selected = (key == current_style)
+        prefix = "✅ " if is_selected else ""
+        tier_icon = "✨" if data["tier"] == "free" else "🔒"
+        button_text = f"{prefix}{data['name']} {tier_icon}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=f"set_style_{key}")])
+    keyboard.append([InlineKeyboardButton("🔙 Назад к настройкам", callback_data="back_to_main_menu")])
+    return InlineKeyboardMarkup(keyboard)
+
 
 def encrypt(text: str) -> str:
     return cipher.encrypt(text.encode()).decode()
+
 
 def decrypt(text: str) -> str:
     try:
@@ -181,46 +282,38 @@ def decrypt(text: str) -> str:
     except:
         return text
 
-async def generate_with_retry(client, prompt, retries=5):
+
+async def generate_with_retry(client, prompt, retries=3):
     for attempt in range(retries):
         try:
-            response = client.models.generate_content(
-                model="gemini-3-flash-preview",
-                contents=prompt
-            )
-            return response.text
-
-
+            response = ollama.generate(model='qwen2.5', prompt=prompt)
+            return response.response
         except Exception as e:
-
             error_text = str(e)
+            print(f"[Gemini Error] Попытка {attempt + 1} не удалась: {error_text}")
 
-            if "RESOURCE_EXHAUSTED" in error_text or "429" in error_text or "quota" in error_text.lower():
+            if "RESOURCE_EXHAUSTED" in error_text or "429" in error_text:
                 return "ОПА! Превышен лимит токенов/квоты API. Запрос временно недоступен."
-
+            if "503" in error_text or "UNAVAILABLE" in error_text:
+                return "ОПА! Модель Google сейчас перегружена (ошибка 503). Попробуйте нажать «Погнали!» еще раз через пару секунд."
 
             if attempt == retries - 1:
-                return "ОПА! Ошибка после всех попыток. Запрос не выполнен."
+                return f"ОПА! Ошибка после всех попыток: {error_text}"
 
-            wait = 2 ** attempt  # экспоненциальная задержка
-            await asyncio.sleep(wait)
+            await asyncio.sleep(2 ** attempt)
 
-    return None
+    return "ОПА! Не удалось получить ответ от ИИ."
 
 
 async def scheduled_daily_summary(context: ContextTypes.DEFAULT_TYPE):
-    """Автоматическая рассылка итогов дня в 23:00"""
-    # job.chat_id передается при регистрации задачи
     chat_id = context.job.chat_id
     message_thread_id = getattr(context.job, 'data', {}).get('message_thread_id', -1)
 
     connection = sqlite3.connect("messages.db")
     crsr = connection.cursor()
 
-    # 1. Проверяем, был ли срач/активность за ЕГОДНЯШНИЙ ДЕНЬ (начиная с 00:00)
     today_start = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d 00:00:00')
 
-    # Находим последнюю паузу > 30 минут за сегодня
     crsr.execute("""
         WITH DatedMessages AS (
             SELECT 
@@ -240,7 +333,6 @@ async def scheduled_daily_summary(context: ContextTypes.DEFAULT_TYPE):
 
     boundary = crsr.fetchone()
 
-    # Забираем сообщения с момента последнего срача (или просто все за сегодня)
     if boundary and boundary[0]:
         start_date = boundary[0]
     else:
@@ -258,22 +350,17 @@ async def scheduled_daily_summary(context: ContextTypes.DEFAULT_TYPE):
     rows = crsr.fetchall()
     connection.close()
 
-    # 2. ПОРОГ АКТИВНОСТИ: если за день меньше 15 сообщений, значит срача не было — молчим
     if len(rows) < 15:
         return
 
-    # 3. Формируем текст
     messages = "\n".join(
         f"{m[2]}: {decrypt(m[3])} : {m[4]}" for m in rows
     )
 
     fun_styles = ["cynic", "war", "sport", "standup", "kanevsky", "drunk", "bimbo", "grandpa", "soviet", "psychologist"]
-
-    # Выбираем случайный стиль
     random_style = random.choice(fun_styles)
     prompt = PROMPTS[random_style]
 
-    # Красивые заголовки под каждый стиль для авто-рассылки
     STYLE_HEADERS = {
         "cynic": "😈 <b>Вечерний разбор межполовых разборок</b>",
         "war": "⚔️ <b>Итоговая сводка с фронта за день</b>",
@@ -288,18 +375,14 @@ async def scheduled_daily_summary(context: ContextTypes.DEFAULT_TYPE):
     }
 
     header = f"{STYLE_HEADERS.get(random_style, '🌙 <b>Вечерняя сводка (23:00)</b>')}\n\n"
-
     full_prompt = f"Это авто-сводка за день.\n\n{prompt}\n\nИстория сообщений:\n{messages}"
 
     text = await generate_with_retry(client, full_prompt)
     text = html.escape(text)
     text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"__(.*?)__", r"<i>\1</i>", text)
-
-    header = "<b>🌙 Вечерняя сводка дневных срачей (23:00)</b>\n\n"
     final_text = header + text
 
-    # 4. Отправляем в чат
     if message_thread_id != -1:
         await context.bot.send_message(chat_id=chat_id, text=final_text, message_thread_id=message_thread_id,
                                        parse_mode=ParseMode.HTML)
@@ -307,20 +390,42 @@ async def scheduled_daily_summary(context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=chat_id, text=final_text, parse_mode=ParseMode.HTML)
 
 
-from telegram.ext import CommandHandler
+async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("чето было")
+    reaction_update = update.message_reaction
+    if not reaction_update:
+        return
 
+    chat_id = reaction_update.chat.id
+    user_id = reaction_update.user.id if reaction_update.user else None
+
+    # Если реакцию поставил реальный пользователь (а не канал)
+    if user_id:
+        # Получаем имя пользователя, если оно доступно в обновлении,
+        # или берем из контекста/базы, либо ставим дефолтное
+        user = reaction_update.user
+        username = user.first_name if user else "Аноним"
+        chat_title = reaction_update.chat.title if hasattr(reaction_update.chat, 'title') else "Группа"
+
+        # Проверяем, добавили ли новую реакцию (а не убрали её)
+        # new_reaction содержит список актуальных реакций пользователя
+        if reaction_update.new_reaction:
+            connection = sqlite3.connect("messages.db")
+            crsr = connection.cursor()
+
+            # Записываем в базу данных участников
+            crsr.execute("""
+                INSERT OR IGNORE INTO chat_members (chat_id, user_id, username, chat_title)
+                VALUES (?, ?, ?, ?)
+            """, (chat_id, user_id, username, chat_title))
+
+            connection.commit()
+            connection.close()
 
 async def send_split_message(context, chat_id: int, message_thread_id: int, text: str, reply_markup=None):
-    """
-    Универсальная безопасная отправка сообщений.
-    Автоматически учитывает топики супергрупп и разбивает длинный текст.
-    """
     MAX_LENGTH = 4000
-
-    # Нормализуем thread_id для супергрупп/топиков (-1 или None отсекаем)
     thread_id = message_thread_id if message_thread_id and message_thread_id != -1 else None
 
-    # Если текст короче лимита — отправляем сразу с клавиатурой
     if len(text) <= MAX_LENGTH:
         kwargs = {
             "chat_id": chat_id,
@@ -330,11 +435,9 @@ async def send_split_message(context, chat_id: int, message_thread_id: int, text
         }
         if thread_id is not None:
             kwargs["message_thread_id"] = thread_id
-
         await context.bot.send_message(**kwargs)
         return
 
-    # Если текст длиннее 4000 символов — режем по абзацам (\n)
     lines = text.split("\n")
     chunks = []
     current_chunk = ""
@@ -349,7 +452,6 @@ async def send_split_message(context, chat_id: int, message_thread_id: int, text
     if current_chunk.strip():
         chunks.append(current_chunk)
 
-    # Отправляем куски по очереди (клавиатуру прикрепляем к последнему куску)
     for i, chunk in enumerate(chunks):
         is_last = (i == len(chunks) - 1)
         kwargs = {
@@ -360,7 +462,6 @@ async def send_split_message(context, chat_id: int, message_thread_id: int, text
         }
         if thread_id is not None:
             kwargs["message_thread_id"] = thread_id
-
         await context.bot.send_message(**kwargs)
 
 
@@ -368,24 +469,15 @@ async def toggle_auto_summary(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     is_topic = update.message.is_topic_message
     message_thread_id = update.message.message_thread_id if is_topic else -1
-
-    # Уникальное имя задачи для этого чата/топика
     job_name = f"daily_summary_{chat_id}_{message_thread_id}"
-
-    # Проверяем, включена ли уже задача
     current_jobs = context.job_queue.get_jobs_by_name(job_name)
 
     if current_jobs:
-        # Если включена — выключаем
         for job in current_jobs:
             job.schedule_removal()
-
         msg = "🔕 <b>Ежедневная авто-сводка в 23:00 отключена.</b>"
     else:
-        # Если выключена — включаем на 23:00 каждый день
-        # Укажите ваш часовой пояс (например, MSK: UTC+3)
         target_time = datetime.time(hour=23, minute=0, second=0, tzinfo=datetime.timezone(datetime.timedelta(hours=2)))
-
         context.job_queue.run_daily(
             scheduled_daily_summary,
             time=target_time,
@@ -393,7 +485,6 @@ async def toggle_auto_summary(update: Update, context: ContextTypes.DEFAULT_TYPE
             name=job_name,
             data={"message_thread_id": message_thread_id}
         )
-
         msg = "🔔 <b>Ежедневная авто-сводка включена!</b>\nКаждый день в 23:00 я буду присылать разбор срачей за день (если они были)."
 
     if is_topic:
@@ -402,64 +493,18 @@ async def toggle_auto_summary(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode=ParseMode.HTML)
 
-def filter_last_discussions(rows, max_gap_seconds=1800):
-    """
-    Принимает список строк сообщений, отсортированных по DATE DESC (от новых к старым).
-    Оставляет только последнее непрерывное обсуждение (где пауза между сообщениями < 30 мин).
-    """
-    if not rows:
-        return []
 
-    drama_rows = [rows[0]]
-
-    for i in range(len(rows) - 1):
-        # Ожидаемый формат даты m[4]: "YYYY-MM-DD HH:MM:SS"
-        # Если дата у вас под другим индексом в m, измените m[4] на нужный индекс!
-        current_time = datetime.datetime.strptime(rows[i][4], '%Y-%m-%d %H:%M:%S')
-        prev_time = datetime.datetime.strptime(rows[i + 1][4], '%Y-%m-%d %H:%M:%S')
-
-        # Разница между текущим и предыдущим сообщением
-        time_diff = (current_time - prev_time).total_seconds()
-
-        # Если разрыв между сообщениями больше 30 минут — срач закончился/начался заново
-        if time_diff > max_gap_seconds:
-            break
-
-        drama_rows.append(rows[i + 1])
-
-    # Возвращаем сообщения в хронологическом порядке (от старых к новым)
-    drama_rows.reverse()
-    return drama_rows
-
-def build_keyboard(style: str, amount_str: str, dif_id: str) -> InlineKeyboardMarkup:
-    """Генерация клавиатуры с подсветкой выбранных настроек"""
-
+def build_main_menu_keyboard(style: str, amount_str: str, dif_id: str, private: bool) -> InlineKeyboardMarkup:
     def btn_title(key: str, current: str, label: str) -> str:
         return f"✅ {label}" if key == current else label
 
+    current_style_data = STYLES_CONFIG.get(style, STYLES_CONFIG["base"])
+    style_display_name = f"{current_style_data['name']} {'✨' if current_style_data['tier'] == 'free' else '🔒'}"
+
     keyboard = [
-        # Стили - Ряд 1: Классические
         [
-            InlineKeyboardButton(btn_title("cynic", style, STYLES_MAP["cynic"]), callback_data="set_style_cynic"),
-            InlineKeyboardButton(btn_title("war", style, STYLES_MAP["war"]), callback_data="set_style_war"),
-            InlineKeyboardButton(btn_title("sport", style, STYLES_MAP["sport"]), callback_data="set_style_sport"),
-            InlineKeyboardButton(btn_title("standup", style, STYLES_MAP["standup"]), callback_data="set_style_standup"),
+            InlineKeyboardButton(f"🎭 Стиль: {style_display_name}", callback_data="open_styles_menu")
         ],
-        # Стили - Ряд 2: Образы и шоу
-        [
-            InlineKeyboardButton(btn_title("kanevsky", style, STYLES_MAP["kanevsky"]),
-                                 callback_data="set_style_kanevsky"),
-            InlineKeyboardButton(btn_title("bimbo", style, STYLES_MAP["bimbo"]), callback_data="set_style_bimbo"),
-            InlineKeyboardButton(btn_title("drunk", style, STYLES_MAP["drunk"]), callback_data="set_style_drunk"),
-            InlineKeyboardButton(btn_title("psychologist", style, STYLES_MAP["psychologist"]), callback_data="set_style_psychologist")
-        ],
-        # Стили - Ряд 3: Атмосферные
-        [
-            InlineKeyboardButton(btn_title("grandpa", style, STYLES_MAP["grandpa"]), callback_data="set_style_grandpa"),
-            InlineKeyboardButton(btn_title("soviet", style, STYLES_MAP["soviet"]), callback_data="set_style_soviet"),
-            InlineKeyboardButton(btn_title("base", style, STYLES_MAP["base"]), callback_data="set_style_base"),
-        ],
-        # Выбор режима/объема
         [
             InlineKeyboardButton(btn_title("drama", amount_str, AMOUNTS_MAP["drama"]), callback_data="set_amt_drama"),
         ],
@@ -469,62 +514,173 @@ def build_keyboard(style: str, amount_str: str, dif_id: str) -> InlineKeyboardMa
             InlineKeyboardButton(btn_title("2h", amount_str, AMOUNTS_MAP["2h"]), callback_data="set_amt_2h"),
             InlineKeyboardButton(btn_title("1d", amount_str, AMOUNTS_MAP["1d"]), callback_data="set_amt_1d"),
         ],
-        # Детализация
         [
             InlineKeyboardButton(btn_title("1", dif_id, DIF_MAP["1"]), callback_data="set_dif_1"),
             InlineKeyboardButton(btn_title("2", dif_id, DIF_MAP["2"]), callback_data="set_dif_2"),
             InlineKeyboardButton(btn_title("3", dif_id, DIF_MAP["3"]), callback_data="set_dif_3"),
         ],
-        # Пуск
         [
             InlineKeyboardButton("🔥 Погнали!", callback_data="start_generate")
         ]
     ]
+    if(private):
+        keyboard.append([InlineKeyboardButton("🔙 Сменить чат", callback_data="back_to_chats")])
     return InlineKeyboardMarkup(keyboard)
 
 
-# 🔹 1. КОМАНДА /resume (Вызов меню)
 async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    is_topic = update.message.is_topic_message
-    message_thread_id = update.message.message_thread_id if is_topic else -1
+    chat = update.effective_chat
     user_id = update.effective_user.id
 
-    # Инициализация дефолтных настроек для пользователя
-    USER_SETTINGS[user_id] = {
-        "style": "cynic",
-        "amount": "50",
-        "dif": "1",
-        "chat_id": chat_id,
-        "message_thread_id": message_thread_id,
-        "is_topic": is_topic
-    }
+    # 1. ЛИЧНЫЙ ЧАТ
+    if chat.type == "private":
+        connection = sqlite3.connect("messages.db")
+        crsr = connection.cursor()
+        crsr.execute("SELECT chat_id, chat_title FROM chat_members WHERE user_id = ?", (user_id,))
+        chats = crsr.fetchall()
+        connection.close()
 
-    menu_text = (
-        "<b>⚙️ Настройка выжимки чата</b>\n\n"
-        f"🎭 <b>Стиль:</b> {STYLES_MAP['cynic']}\n"
-        f"📊 <b>Объем:</b> {AMOUNTS_MAP['50']}\n"
-        f"🔍 <b>Детализация:</b> {DIF_MAP['1']}\n\n"
-        "<i>Выберите нужные параметры и нажмите «🔥 Погнали!»:</i>"
-    )
+        # Если пользователя нигде нет
+        if not chats:
+            await update.message.reply_text(
+                "🔒 **Анонимный режим Сводчика**\n\n"
+                "Я пока не вижу вас ни в одном общем чате.\n\n"
+                "💡 **Как получить доступ:**\n"
+                "Напишите сообщение в группе, где я добавлен, или поставьте реакцию на моё приветственное сообщение!",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
 
-    reply_markup = build_keyboard("cynic", "50", "1")
+        # Если чат всего один
+        if len(chats) == 1:
+            chat_id, chat_title = chats[0]
 
-    await send_split_message(context, chat_id, message_thread_id, menu_text, reply_markup)
+            if user_id not in USER_SETTINGS:
+                USER_SETTINGS[user_id] = {"style": "base", "amount": "50", "dif": "1"}
+
+            USER_SETTINGS[user_id]["chat_id"] = chat_id
+            USER_SETTINGS[user_id]["chat_title"] = chat_title or f"Чат {chat_id}"
+            USER_SETTINGS[user_id]["message_thread_id"] = -1
+            USER_SETTINGS[user_id]["is_topic"] = False
+
+            style = USER_SETTINGS[user_id]["style"]
+            current_style_data = STYLES_CONFIG.get(style, STYLES_CONFIG["base"])
+
+            menu_text = (
+                f"<b>🎙 Панель управления Сводчика</b>\n"
+                f"💬 Текущий чат: <b>{chat_title or chat_id}</b>\n\n"
+                f"Текущий рассказчик: <b>{current_style_data['name']} ✨</b>\n"
+                f"<i>{current_style_data['desc']}</i>\n\n"
+                "Выберите глубину анализа или смените персонажа:"
+            )
+
+            # Создаем клавиатуру с нуля
+            reply_markup = build_main_menu_keyboard(style, "50", "1", chat.type == "private")
+            await update.message.reply_text(text=menu_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+            return
+
+        # Если чатов несколько — шлем список с кнопками выбора
+        else:
+            keyboard = [[InlineKeyboardButton(f"💬 {title or f'Чат {cid}'}", callback_data=f"select_chat_{cid}")] for
+                        cid, title in chats]
+            await update.message.reply_text(
+                "📁 <b>Выберите чат, для которого хотите получить сводку:</b>",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+    # 2. ГРУППОВОЙ ЧАТ
+    else:
+        is_topic = update.message.is_topic_message if update.message else False
+        message_thread_id = update.message.message_thread_id if is_topic else -1
+
+        USER_SETTINGS[user_id] = {
+            "style": "base",
+            "amount": "50",
+            "dif": "1",
+            "chat_id": chat.id,
+            "message_thread_id": message_thread_id,
+            "is_topic": is_topic
+        }
+
+        current_style_data = STYLES_CONFIG["base"]
+        menu_text = (
+            "<b>🎙 Панель управления Летописца</b>\n\n"
+            f"Текущий рассказчик: <b>{current_style_data['name']} ✨</b>\n"
+            f"<i>{current_style_data['desc']}</i>\n\n"
+            "Выберите глубину анализа или смените персонажа в меню ниже:"
+        )
 
 
-# 🔹 2. ОБРАБОТЧИК НАЖАТИЙ НА КНОПКИ (Callback Query)
-async def resume_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        reply_markup = build_main_menu_keyboard("base", "50", "1",chat.type == "private")
+        await send_split_message(context, chat.id, message_thread_id, menu_text, reply_markup)
+
+
+async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    await query.answer()  # Сразу убираем часики на кнопке
 
-    user_id = query.from_user.id
     data = query.data
+    private = query.message.chat.type == "private"
+    if query.data.startswith("select_chat_"):
+        chat_id = int(query.data.split("_")[2])
+        user_id = query.from_user.id
 
-    # Если у пользователя нет сохраненных сессионных данных, задаем дефолты
+        # Достаем название выбранного чата из базы
+        connection = sqlite3.connect("messages.db")
+        crsr = connection.cursor()
+        crsr.execute("SELECT chat_title FROM chat_members WHERE chat_id = ? AND user_id = ? LIMIT 1",
+                     (chat_id, user_id))
+        row = crsr.fetchone()
+        connection.close()
+
+        chat_title = row[0] if row and row[0] else f"Чат {chat_id}"
+
+        # Инициализируем или обновляем настройки пользователя
+        if user_id not in USER_SETTINGS:
+            USER_SETTINGS[user_id] = {"style": "base", "amount": "50", "dif": "1"}
+
+        USER_SETTINGS[user_id]["chat_id"] = chat_id
+        USER_SETTINGS[user_id]["chat_title"] = chat_title
+        USER_SETTINGS[user_id]["message_thread_id"] = -1
+        USER_SETTINGS[user_id]["is_topic"] = False
+
+        style = USER_SETTINGS[user_id]["style"]
+        current_style_data = STYLES_CONFIG.get(style, STYLES_CONFIG["base"])
+
+        menu_text = (
+            f"<b>🎙 Панель управления Сводчика</b>\n"
+            f"💬 Текущий чат: <b>{chat_title}</b>\n\n"
+            f"Текущий рассказчик: <b>{current_style_data['name']} ✨</b>\n"
+            f"<i>{current_style_data['desc']}</i>\n\n"
+            "Выберите глубину анализа или смените персонажа:"
+        )
+
+        reply_markup = build_main_menu_keyboard(style, "50", "1",private)
+
+        await query.answer()
+        await query.message.edit_text(text=menu_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+        return
+
+    # Если это нажатие связано с помощью /help
+    if data.startswith("help_"):
+        if data == "help_close":
+            await query.message.delete()
+            return
+        text = HELP_TEXTS.get(data, HELP_TEXTS["help_main"])
+        await query.edit_message_text(
+            text=text,
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_help_keyboard()
+        )
+        return
+
+    # Иначе обрабатываем логику генерации и меню сводок
+    user_id = query.from_user.id
     if user_id not in USER_SETTINGS:
         USER_SETTINGS[user_id] = {
-            "style": "cynic", "amount": "50", "dif": "1",
+            "style": "base", "amount": "50", "dif": "1",
             "chat_id": query.message.chat_id,
             "message_thread_id": query.message.message_thread_id if query.message.is_topic_message else -1,
             "is_topic": query.message.is_topic_message
@@ -532,35 +688,116 @@ async def resume_button_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     cfg = USER_SETTINGS[user_id]
 
-    # Обработка нажатий на параметры
+    if data == "open_styles_menu":
+        await query.edit_message_text(
+            text="<b>🎭 Выберите рассказчика:</b>\n\nСтили с иконкой 🔒 доступны только в PRO-версии чата.",
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_style_selection_keyboard(cfg["style"])
+        )
+        return
+
+    if data == "back_to_main_menu":
+        current_style_data = STYLES_CONFIG.get(cfg["style"], STYLES_CONFIG["base"])
+        menu_text = (
+            "<b>🎙 Панель управления Летописца</b>\n\n"
+            f"Текущий рассказчик: <b>{current_style_data['name']}</b>\n"
+            f"<i>{current_style_data['desc']}</i>\n\n"
+            "Выберите глубину анализа или смените персонажа в меню ниже:"
+        )
+        if(private):
+            menu_text = (
+                f"<b>🎙 Панель управления Сводчика</b>\n"
+                f"💬 Текущий чат: <b>{USER_SETTINGS[user_id]["chat_title"]}</b>\n\n"
+                f"Текущий рассказчик: <b>{current_style_data['name']} ✨</b>\n"
+                f"<i>{current_style_data['desc']}</i>\n\n"
+                "Выберите глубину анализа или смените персонажа:"
+            )
+        reply_markup = build_main_menu_keyboard(cfg["style"], cfg["amount"], cfg["dif"],private)
+        await query.edit_message_text(text=menu_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+        return
+
     if data.startswith("set_style_"):
-        cfg["style"] = data.replace("set_style_", "")
-    elif data.startswith("set_amt_"):
+        new_style = data.replace("set_style_", "")
+        if STYLES_CONFIG[new_style]["tier"] == "pro":
+            await query.answer("🔒 Этот персонаж доступен только в PRO-версии чата!", show_alert=True)
+            return
+        cfg["style"] = new_style
+
+        current_style_data = STYLES_CONFIG[new_style]
+        menu_text = (
+            "<b>🎙 Панель управления Летописца</b>\n\n"
+            f"Текущий рассказчик: <b>{current_style_data['name']}</b>\n"
+            f"<i>{current_style_data['desc']}</i>\n\n"
+            "Выберите глубину анализа или смените персонажа в меню ниже:"
+        )
+        if (private):
+            menu_text = (
+                f"<b>🎙 Панель управления Сводчика</b>\n"
+                f"💬 Текущий чат: <b>{USER_SETTINGS[user_id]["chat_title"]}</b>\n\n"
+                f"Текущий рассказчик: <b>{current_style_data['name']} ✨</b>\n"
+                f"<i>{current_style_data['desc']}</i>\n\n"
+                "Выберите глубину анализа или смените персонажа:"
+            )
+        reply_markup = build_main_menu_keyboard(cfg["style"], cfg["amount"], cfg["dif"],private)
+        await query.edit_message_text(text=menu_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+        return
+
+
+    # 2. НОВЫЙ ХЭНДЛЕР: Возврат к списку чатов («Назад»)
+    if query.data == "back_to_chats":
+        user_id = query.from_user.id
+
+        connection = sqlite3.connect("messages.db")
+        crsr = connection.cursor()
+        crsr.execute("SELECT chat_id, chat_title FROM chat_members WHERE user_id = ?", (user_id,))
+        chats = crsr.fetchall()
+        connection.close()
+
+        if not chats:
+            await query.answer("У вас нет доступных чатов.", show_alert=True)
+            return
+
+        # Формируем список чатов заново
+        keyboard = [[InlineKeyboardButton(f"💬 {title or f'Чат {cid}'}", callback_data=f"select_chat_{cid}")] for
+                    cid, title in chats]
+
+        await query.answer()
+        await query.message.edit_text(
+            "📁 <b>Выберите чат, для которого хотите получить сводку:</b>",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    if data.startswith("set_amt_"):
         cfg["amount"] = data.replace("set_amt_", "")
     elif data.startswith("set_dif_"):
         cfg["dif"] = data.replace("set_dif_", "")
-
-    # Клик по кнопке "🔥 Погнали!" -> Запуск генерации
     elif data == "start_generate":
         await query.edit_message_text(text="⏳ <i>Собираю сообщения и генерирую выжимку...</i>",
                                       parse_mode=ParseMode.HTML)
         await execute_resume_generation(query, context, cfg)
         return
 
-    # Обновление текста меню с подсвеченными кнопками
+    current_style_data = STYLES_CONFIG.get(cfg["style"], STYLES_CONFIG["base"])
     menu_text = (
-        "<b>⚙️ Настройка выжимки чата</b>\n\n"
-        f"🎭 <b>Стиль:</b> {STYLES_MAP[cfg['style']]}\n"
-        f"📊 <b>Объем:</b> {AMOUNTS_MAP[cfg['amount']]}\n"
-        f"🔍 <b>Детализация:</b> {DIF_MAP[cfg['dif']]}\n\n"
-        "<i>Выберите нужные параметры и нажмите «🔥 Погнали!»:</i>"
+        "<b>🎙 Панель управления Летописца</b>\n\n"
+        f"Текущий рассказчик: <b>{current_style_data['name']}</b>\n"
+        f"<i>{current_style_data['desc']}</i>\n\n"
+        "Выберите глубину анализа или смените персонажа в меню ниже:"
     )
+    if (private):
+        menu_text = (
+            f"<b>🎙 Панель управления Сводчика</b>\n"
+            f"💬 Текущий чат: <b>{USER_SETTINGS[user_id]["chat_title"]}</b>\n\n"
+            f"Текущий рассказчик: <b>{current_style_data['name']} ✨</b>\n"
+            f"<i>{current_style_data['desc']}</i>\n\n"
+            "Выберите глубину анализа или смените персонажа:"
+        )
 
-    reply_markup = build_keyboard(cfg["style"], cfg["amount"], cfg["dif"])
+    reply_markup = build_main_menu_keyboard(cfg["style"], cfg["amount"], cfg["dif"],private)
     await query.edit_message_text(text=menu_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
 
-
-# 🔹 3. ОСНОВНАЯ ЛОГИКА ГЕНЕРАЦИИ (Выборка из DB + Запрос в Gemini)
 async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, cfg: dict):
     chat_id = cfg["chat_id"]
     message_thread_id = cfg["message_thread_id"]
@@ -568,19 +805,13 @@ async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, c
 
     connection = sqlite3.connect("messages.db")
     crsr = connection.cursor()
-    # crsr.execute("""
-    #     CREATE INDEX IF NOT EXISTS idx_messages_chat_thread_date
-    #     ON messages (chat_id, message_thread_id, date);
-    # """)
 
     amount_param = cfg["amount"]
 
-    # --- Выборка из БД ---
     if amount_param == "drama":
-        MIN_MESSAGES_FOR_DRAMA = 50  # Порог: минимум сообщений для признания срача (можно поставить 40 или 50)
-        MAX_GAP_SECONDS = 900  # Максимальная пауза внутри срача: 15 минут (900 сек)
+        MIN_MESSAGES_FOR_DRAMA = 50
+        MAX_GAP_SECONDS = 900
 
-        # 1. Забираем последние 1000 сообщений с временными метками
         crsr.execute("""
                 SELECT *, strftime('%s', date) as ts
                 FROM messages
@@ -594,13 +825,10 @@ async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, c
         if not raw_rows:
             rows = []
         else:
-            # 2. Группируем сообщения по сессиям (блоки с паузами < 15 мин)
             sessions = []
             current_session = [raw_rows[0]]
 
             for i in range(len(raw_rows) - 1):
-                # Считаем разницу между текущим и следующим (более старым) сообщением
-                # Предполагается, что 'ts' — это последний элемент в кортеже row
                 curr_ts = int(raw_rows[i][-1])
                 prev_ts = int(raw_rows[i + 1][-1])
 
@@ -613,17 +841,13 @@ async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, c
             if current_session:
                 sessions.append(current_session)
 
-            # 3. Ищем ПЕРВУЮ (самую свежую) сессию, которая набрала нужный объем сообщений
             found_session = None
             for sess in sessions:
                 if len(sess) >= MIN_MESSAGES_FOR_DRAMA:
                     found_session = sess
                     break
 
-            # 4. Если нашли жирный срач — берем его. Если нет — берем просто последнюю сессию.
             target_session = found_session if found_session else sessions[0]
-
-            # Разворачиваем сообщения обратно от старых к новым для нормального чтения промптом
             rows = list(reversed(target_session))
 
     elif amount_param in ["2h", "1d"]:
@@ -655,6 +879,7 @@ async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, c
         rows = crsr.fetchall()
 
     if not rows:
+        connection.close()
         await query.delete_message()
         if is_topic:
             return await context.bot.send_message(chat_id=chat_id, text="Не было найдено сообщений",
@@ -662,164 +887,220 @@ async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, c
         return await context.bot.send_message(chat_id=chat_id, text="Не было найдено сообщений",
                                               parse_mode=ParseMode.HTML)
 
+    selected_style = cfg["style"]
+    dif_id = int(cfg["dif"])
+    last_msg_date = rows[-1][4]
+
+    crsr.execute("""
+        SELECT response_text, created_at 
+        FROM summary_cache 
+        WHERE chat_id = ? 
+          AND message_thread_id = ? 
+          AND style = ? 
+          AND amount_param = ? 
+          AND last_msg_date = ?
+    """, (chat_id, message_thread_id, selected_style, f"{amount_param}_{dif_id}", last_msg_date))
+
+    cached_result = crsr.fetchone()
+
+    if cached_result:
+        connection.close()
+        cached_text = cached_result[0]
+
+        if is_topic:
+            return await query.message.edit_text(text=cached_text,
+                                                  message_thread_id=message_thread_id, parse_mode=ParseMode.HTML)
+        return await query.message.edit_text(text=cached_text, parse_mode=ParseMode.HTML)
+
     messages = "\n".join(
         f"{m[2]}: {decrypt(m[3])} : {m[4]}" for m in rows
     )
 
-    # --- Подготовка промпта ---
-    selected_style = cfg["style"]
-    dif_id = int(cfg["dif"])
-
-    chosen_prompt = PROMPTS.get(selected_style, PROMPTS["cynic"])
+    chosen_prompt = PROMPTS.get(selected_style, PROMPTS["base"])
     if selected_style == "base":
         chosen_prompt = chosen_prompt.format(dif_text=difs[dif_id])
 
     full_prompt = f"{chosen_prompt}\n\nИстория сообщений:\n{messages}"
 
-    # --- Генерация ---
     text = await generate_with_retry(client, full_prompt)
+
+    if not text or text.startswith("ОПА!"):
+        connection.close()
+        try:
+            await query.edit_message_text(text=text, parse_mode=ParseMode.HTML)
+        except:
+            await query.message.reply_text(text=text, parse_mode=ParseMode.HTML)
+        return
+
     text = html.escape(text)
     text = re.sub(r"\*\*(.*?)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"__(.*?)__", r"<i>\1</i>", text)
 
-    # Удаляем служебное сообщение с выбором меню
-    await query.delete_message()
+    now_str = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    crsr.execute("""
+            INSERT OR REPLACE INTO summary_cache 
+            (chat_id, message_thread_id, style, amount_param, last_msg_date, response_text, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (chat_id, message_thread_id, selected_style, f"{amount_param}_{dif_id}", last_msg_date, text, now_str))
 
-    # Отправляем результат
+    connection.commit()
+    connection.close()
+
+
     if is_topic:
-        await context.bot.send_message(chat_id=chat_id, text=text, message_thread_id=message_thread_id,
+        await query.message.edit_text(text=text, message_thread_id=message_thread_id,
                                        parse_mode=ParseMode.HTML)
     else:
-        await context.bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
+        await query.message.edit_text(text=text, parse_mode=ParseMode.HTML)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    if update.message.is_topic_message:
-        message_thread_id = update.message.message_thread_id
-        await context.bot.send_message(chat_id=chat_id, message_thread_id=message_thread_id,text="""
-Формат использования команды:
-    /resume <уровень> <количество> — по последним сообщениям
-    /resume <уровень> <время> <единица> — за период
-    
-Уровень - уровень сложности выжимки, от 1 до 3, где 1 - самая краткая и 3 - самая подробная
-Единицы времени - s - секунды, m - минуты, h - часы, d - дни, w - недели 
-
-Примеры:
-    /resume 3 100 — последние 100 сообщений очень подробно
-    /resume 1 2 h — за последние 2 часа очень кратко""")
-    else:
-        await context.bot.send_message(chat_id=chat_id, text="""
-Формат использования команды:
-    /resume <уровень> <количество> — по последним сообщениям
-    /resume <уровень> <время> <единица> — за период
-    
-Уровень - уровень сложности выжимки, от 1 до 3, где 1 - самая краткая и 3 - самая подробная
-Единицы времени - s - секунды, m - минуты, h - часы, d - дни, w - недели 
-
-Примеры:
-    /resume 3 100 — последние 100 сообщений очень подробно
-    /resume 1 2 h — за последние 2 часа очень кратко""")
+    if update.message:
+        await update.message.reply_text(
+            text=HELP_TEXTS["help_main"],
+            parse_mode=ParseMode.HTML,
+            reply_markup=get_help_keyboard()
+        )
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    msg_text = """
+Привет! Я бот для анализа переписок.
+
+Я могу:
+    — сохранять сообщения из чата
+    — делать краткие и подробные резюме диалогов
+    — выделять ключевые темы и позиции участников
+
+Добавь меня в группу и выдай права администратора, чтобы я мог видеть все сообщения и работать корректно.
+
+Команды:
+    /resume — получить резюме переписки
+    /help — гайд по использованию команд"""
+
     if update.message.is_topic_message:
-        message_thread_id = update.message.message_thread_id
-        await context.bot.send_message(chat_id=chat_id, message_thread_id=message_thread_id, text= """
-Привет! Я бот для анализа переписок.
-
-Я могу:
-    — сохранять сообщения из чата
-    — делать краткие и подробные резюме диалогов
-    — выделять ключевые темы и позиции участников
-
-Добавь меня в группу и выдай права администратора, чтобы я мог видеть все сообщения и работать корректно.
-
-Команды:
-    /resume — получить резюме переписки
-    /help — гайд по использованию команд""")
+        await context.bot.send_message(chat_id=chat_id, message_thread_id=update.message.message_thread_id,
+                                       text=msg_text)
     else:
-        await context.bot.send_message(chat_id=chat_id,text="""
-Привет! Я бот для анализа переписок.
+        await context.bot.send_message(chat_id=chat_id, text=msg_text)
 
-Я могу:
-    — сохранять сообщения из чата
-    — делать краткие и подробные резюме диалогов
-    — выделять ключевые темы и позиции участников
 
-Добавь меня в группу и выдай права администратора, чтобы я мог видеть все сообщения и работать корректно.
+async def on_bot_added_to_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Проверяем, добавили ли именно нашего бота
+    bot_id = context.bot.id
+    new_members = update.message.new_chat_members
 
-Команды:
-    /resume — получить резюме переписки
-    /help — гайд по использованию команд""")
+    if any(member.id == bot_id for member in new_members):
+        # Вызываем вашу функцию приветствия/реакции
+        await send_welcome_reaction_message(update, context)
 
+async def send_welcome_reaction_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.message.chat
+
+    # Текст инструкции для анонимного режима
+    text = (
+        "🤖 <b>Привет! Я Сводчик.</b>\n\n"
+        "Хотите использовать мои функции **анонимно** в личных сообщениях?\n"
+        "👉 Просто поставьте **любую реакцию** (👍, 🔥 и т.д.) на это сообщение, и я запомню, что вы участник этого чата!"
+    )
+
+    sent_message = await context.bot.send_message(
+        chat_id=chat.id,
+        text=text,
+        parse_mode=ParseMode.HTML
+    )
+
+    # Опционально: можно закрепить сообщение, чтобы участники его видели
+    try:
+        await context.bot.pin_chat_message(chat_id=chat.id, message_id=sent_message.message_id)
+    except Exception:
+        pass  # Если у бота нет прав на закрепление, просто пропустим
 
 async def save_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
+    if message and message.text:
+        chat = message.chat
+        # Сохраняем только из групп и супергрупп
+        if chat.type in ["group", "supergroup"]:
+            user = message.from_user
+            user_id = user.id if user else 0
+            username = user.first_name if user else "Anonymous"
+            chat_title = chat.title
 
-    if message:
-        if message.text:
-            origin = message.forward_origin
-            if origin:
-                if origin.type == "user":
-                    username = origin.sender_user.first_name
-                elif origin.type == "hidden_user":
-                    username = origin.sender_user_name  # только строка
-                elif origin.type in ["chat", "channel"]:
-                    username = origin.chat.title
-                else:
-                    username = "Anonymous"
-            else:
-                username = message.from_user.first_name
-            message_thread_id = -1
-            if update.message.is_topic_message:
-                message_thread_id = message.message_thread_id
-
-            text = encrypt(message.text)
-            chat_id = message.chat.id
+            message_thread_id = message.message_thread_id if message.is_topic_message else -1
+            text = message.text  # Если у вас используется шифрование, оставьте encrypt(message.text)
+            chat_id = chat.id
             date = message.date.strftime('%Y-%m-%d %H:%M:%S')
 
             connection = sqlite3.connect("messages.db")
             crsr = connection.cursor()
+
+            # 1. Сохраняем сообщение с user_id
             crsr.execute("""
-                INSERT INTO messages VALUES (?, ?, ?, ?, ?)
-            """, (chat_id, message_thread_id, username, text, date))
+                INSERT INTO messages (chat_id, message_thread_id, user_id, username, text, date)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (chat_id, message_thread_id, user_id, username, text, date))
+
+            # 2. Фиксируем связку юзера и чата (с названием чата для ЛС)
+            crsr.execute("""
+                INSERT OR IGNORE INTO chat_members (chat_id, user_id, username, chat_title)
+                VALUES (?, ?, ?, ?)
+            """, (chat_id, user_id, username, chat_title))
+
             connection.commit()
             connection.close()
 
-async def inline_handler(update, context):
-    results = [
-        InlineQueryResultArticle(
-            id="1",
-            title="📊 Резюме последних сообщений",
-            description="Например: сделать краткое резюме последних 50 сообщений",
-            input_message_content=InputTextMessageContent(
-                f"/resume 1 50"
-            )
-        ),
-        InlineQueryResultArticle(
-            id="2",
-            title="⏱ Резюме за время",
-            description="Например: подробная сводка за последние 2 часа",
-            input_message_content=InputTextMessageContent(
-                f"/resume 3 2 h"
-            )
-        )
-    ]
-    await update.inline_query.answer(results)
+
+async def cleanup_old_messages(context: ContextTypes.DEFAULT_TYPE):
+    try:
+        cutoff_date = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)).strftime(
+            '%Y-%m-%d %H:%M:%S')
+        connection = sqlite3.connect("messages.db")
+        crsr = connection.cursor()
+        crsr.execute("""
+            DELETE FROM messages 
+            WHERE date < ?;
+        """, (cutoff_date,))
+        deleted_count = crsr.rowcount
+        connection.commit()
+        connection.close()
+        print(f"[TTL Cleanup] Удалено сообщений: {deleted_count}")
+    except Exception as e:
+        print(f"[TTL Cleanup Error] {e}")
 
 
 def main():
-    app.add_handler(CommandHandler("resume", resume_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("auto_summary", toggle_auto_summary))
-    app.add_handler(MessageHandler(filters.ALL, save_message))
-    app.add_handler(CallbackQueryHandler(resume_button_handler))
-    app.add_handler(InlineQueryHandler(inline_handler))
-    print("Bot is running...")
-    app.run_polling()
+    try:
+        app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_bot_added_to_chat))
+        app.add_handler(MessageReactionHandler(handle_reaction))
+        app.add_handler(CommandHandler("resume", resume_command))
+        app.add_handler(CommandHandler("help", help_command))
+        app.add_handler(CommandHandler("start", start_command))
+        app.add_handler(CommandHandler("auto_summary", toggle_auto_summary))
+        app.add_handler(MessageHandler(filters.ALL, save_message))
+        app.add_handler(CallbackQueryHandler(unified_callback_handler))
+
+
+        if app.job_queue:
+            cleanup_time = datetime.time(hour=4, minute=0, second=0,
+                                         tzinfo=datetime.timezone(datetime.timedelta(hours=3)))
+            app.job_queue.run_daily(
+                cleanup_old_messages,
+                time=cleanup_time,
+                name="daily_db_cleanup"
+            )
+
+        print("Bot is running...")
+        app.run_polling(allowed_updates=[
+    Update.MESSAGE,
+    Update.MESSAGE_REACTION,
+    Update.CHAT_MEMBER,
+    Update.MY_CHAT_MEMBER,
+    Update.CALLBACK_QUERY
+])
+    except Exception as e:
+        print(f"[Fatal Error] {e}")
 
 
 if __name__ == "__main__":
