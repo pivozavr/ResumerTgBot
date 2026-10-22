@@ -1,22 +1,62 @@
 import sqlite3
+import os
 
-connection = sqlite3.connect("messages.db")
-crsr = connection.cursor()
+DB_NAME = "messages.db"
 
-# Забираем абсолютно всех уникальных пользователей из истории сообщений для каждого чата
-crsr.execute("""
-    INSERT OR IGNORE INTO chat_members (chat_id, user_id, username, chat_title)
-    SELECT DISTINCT chat_id, user_id, username, 'Группа ' || chat_id 
-    FROM messages 
-    WHERE user_id IS NOT NULL AND username IS NOT NULL;
-""")
 
-connection.commit()
+def init_database():
+    print(1)  # Заглушка визуальная или можно убрать, но для ясности:
+    print(f"🔄 Проверка и инициализация базы данных ({DB_NAME})...")
 
-# Посмотрим, сколько всего записей связей «чат-участник» теперь в базе
-crsr.execute("SELECT COUNT(*) FROM chat_members;")
-total_members = crsr.fetchone()[0]
+    # Открываем соединение (если файла нет, SQLite создаст его автоматически)
+    connection = sqlite3.connect(DB_NAME)
+    cursor = connection.cursor()
 
-connection.close()
+    # 1. Таблица для хранения сообщений чата (нужна для суммаризации «Контекстом»)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER NOT NULL,
+            user_id INTEGER,
+            username TEXT,
+            text TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
 
-print(f"✅ Успешно! Собрано и записано уникальных связей участников с чатами: {total_members}")
+    # 2. Таблица участников чата (заполняется через реакции и события)
+    # Использование PRIMARY KEY (chat_id, user_id) гарантирует уникальность и позволяет
+    # использовать INSERT OR IGNORE без риска затереть данные.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_members (
+            chat_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            username TEXT,
+            chat_title TEXT,
+            PRIMARY KEY (chat_id, user_id)
+        )
+    """)
+
+    # 3. Таблица для сохранения пользовательских настроек/конфигураций (опционально)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_settings (
+            user_id INTEGER PRIMARY KEY,
+            target_chat_id INTEGER,
+            chat_type TEXT,
+            is_topic BOOLEAN DEFAULT 0,
+            message_thread_id INTEGER
+        )
+    """)
+
+    # Создаем индексы для ускорения поиска по чатам (безопасно для существующих индексов)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat_time ON messages(chat_id, timestamp)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chat_members_lookup ON chat_members(chat_id, user_id)")
+
+    connection.commit()
+    connection.close()
+
+    print("✅ База данных успешно инициализирована!")
+    print("🛡 Старые данные и таблицы остались в полной безопасности (ничего не удалено).")
+
+
+init_database()
