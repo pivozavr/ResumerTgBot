@@ -4,11 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ba405220-30d7-4115-8029-c0d6f54c3da8" name="Changes" comment="4000 symbols bug fix">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/first_run.py" beforeDir="false" afterPath="$PROJECT_DIR$/first_run.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-    </list>
+    <list default="true" id="ba405220-30d7-4115-8029-c0d6f54c3da8" name="Changes" comment="all free" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -192,7 +188,31 @@
       <option name="project" value="LOCAL" />
       <updated>1789559515608</updated>
     </task>
-    <option name="localTasksCounter" value="16" />
+    <task id="LOCAL-00016" summary="anonym mode added">
+      <option name="closed" value="true" />
+      <created>1792682383777</created>
+      <option name="number" value="00016" />
+      <option name="presentableId" value="LOCAL-00016" />
+      <option name="project" value="LOCAL" />
+      <updated>1792682383778</updated>
+    </task>
+    <task id="LOCAL-00017" summary="first run changed">
+      <option name="closed" value="true" />
+      <created>1792682565423</created>
+      <option name="number" value="00017" />
+      <option name="presentableId" value="LOCAL-00017" />
+      <option name="project" value="LOCAL" />
+      <updated>1792682565423</updated>
+    </task>
+    <task id="LOCAL-00018" summary="all free">
+      <option name="closed" value="true" />
+      <created>1792682615341</created>
+      <option name="number" value="00018" />
+      <option name="presentableId" value="LOCAL-00018" />
+      <option name="project" value="LOCAL" />
+      <updated>1792682615341</updated>
+    </task>
+    <option name="localTasksCounter" value="19" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
@@ -205,6 +225,9 @@
     <MESSAGE value="prompt renewed, added blockquote" />
     <MESSAGE value="new prompts, better selection" />
     <MESSAGE value="4000 symbols bug fix" />
-    <option name="LAST_COMMIT_MESSAGE" value="4000 symbols bug fix" />
+    <MESSAGE value="anonym mode added" />
+    <MESSAGE value="first run changed" />
+    <MESSAGE value="all free" />
+    <option name="LAST_COMMIT_MESSAGE" value="all free" />
   </component>
 </project>
