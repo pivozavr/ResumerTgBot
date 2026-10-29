@@ -1,8 +1,10 @@
 import asyncio
 import random
+from collections import Counter
 
 import ollama
 from ollama import chat, ChatResponse
+from pyrogram.filters import private
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler, CallbackQueryHandler, MessageReactionHandler
@@ -250,6 +252,103 @@ HELP_TEXTS = {
     )
 }
 
+async def format_stats_message(chat_title: str, stats: dict, bot_username: str) -> str:
+    if not stats:
+        return "📊 В этом чате пока недостаточно данных для аналитики. Пообщайтесь еще немного!"
+
+    text = (
+        f"📊 <b>Хроники и статистика чата: {chat_title}</b>\n\n"
+        f"💬 Всего сообщений зафиксировано: <b>{stats['total_messages']}</b>\n"
+        f"👥 Активных участников: <b>{stats['unique_users']}</b>\n\n"
+        f"🏆 <b>Главный флудер:</b> @{stats['flooder_name']} ({stats['flooder_count']} сообщ.)\n"
+        f"🦉 <b>Ночной сыч:</b> @{stats['owl_name']} (любитель полуночных дискуссий)\n"
+        f"⚡️ <b>Пик активности:</b> {stats['peak_activity']}\n\n"
+        f"────────────────────────\n"
+        f"🎙 <i>Сводку подготовил бот <b>Контекст</b>. Хотите такой же в свой чат?</i>\n"
+        f"👉 @{bot_username}"
+    )
+    return text
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+
+    # Считаем статистику по текущему чату
+    stats = calculate_chat_stats(chat.id)
+
+    # Получаем username нашего бота для промо-ссылки
+    bot_info = await context.bot.get_me()
+
+    report_text = await format_stats_message(chat.title or "этого чата", stats, bot_info.username)
+
+    await update.message.reply_text(report_text, parse_mode="HTML")
+
+def calculate_chat_stats(chat_id: int) -> dict:
+    connection = sqlite3.connect("messages.db")
+    cursor = connection.cursor()
+
+    # Достаем все сообщения для конкретного чата
+    cursor.execute("""
+        SELECT user_id, username, text, date 
+        FROM messages 
+        WHERE chat_id = ?
+    """, (chat_id,))
+    rows = cursor.fetchall()
+    connection.close()
+
+    if not rows:
+        return None
+
+    user_message_counts = Counter()
+    night_owls = Counter()
+    hours_counter = Counter()
+    total_messages = len(rows)
+    active_users = set()
+
+    for user_id, username, text, date_str in rows:
+        if not username:
+            continue
+
+        active_users.add(user_id)
+        user_message_counts[username] += 1
+
+        # Пытаемся распарсить дату сообщения для Ночного сыча и Пика активности
+        if date_str:
+            try:
+                # Ожидаем формат вида 'YYYY-MM-DD HH:MM:SS' или аналогичный ISO
+                dt = datetime.fromisoformat(str(date_str))
+                hour = dt.hour
+                hours_counter[hour] += 1
+
+                # Ночные часы: с 00:00 до 05:00 ночи
+                if 0 <= hour < 5:
+                    night_owls[username] += 1
+            except Exception:
+                # Если формат даты отличается или неполный, пропускаем временной анализ
+                pass
+
+
+    top_flooder = user_message_counts.most_common(1)
+    flooder_name = top_flooder[0][0] if top_flooder else "Пока нет данных"
+    flooder_count = top_flooder[0][1] if top_flooder else 0
+
+    top_night_owl = night_owls.most_common(1)
+    owl_name = top_night_owl[0][0] if top_night_owl else "Тихоня ночи"
+
+    # 3. Пик активности (самый активный час)
+    peak_hour = hours_counter.most_common(1)
+    peak_text = f"{peak_hour[0][0]}:00 — {peak_hour[0][0] + 1}:00" if peak_hour else "Весь день в ровном темпе"
+
+    return {
+        "total_messages": total_messages,
+        "unique_users": len(active_users),
+        "flooder_name": flooder_name,
+        "flooder_count": flooder_count,
+        "owl_name": owl_name,
+        "peak_activity": peak_text
+    }
+
+
 
 def get_help_keyboard():
     return InlineKeyboardMarkup([
@@ -281,6 +380,26 @@ def decrypt(text: str) -> str:
         return cipher.decrypt(text.strip().encode()).decode()
     except:
         return text
+
+
+def get_chat_topics(chat_id: int) -> list:
+    """Возвращает список уникальных веток (message_thread_id), где есть сообщения."""
+    connection = sqlite3.connect("messages.db")
+    cursor = connection.cursor()
+
+    # Ищем все уникальные thread_id, исключая общую ветку (где thread_id IS NULL или 0)
+    cursor.execute("""
+        SELECT DISTINCT message_thread_id 
+        FROM messages 
+        WHERE chat_id = ? AND message_thread_id IS NOT NULL
+    """, (chat_id,))
+
+    rows = cursor.fetchall()
+    connection.close()
+
+    # Возвращаем список ID топиков
+    return [row[0] for row in rows if row[0] is not None]
+
 
 
 async def generate_with_retry(client, prompt, retries=3):
@@ -623,21 +742,97 @@ async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT
 
     data = query.data
     private = query.message.chat.type == "private"
-    if query.data.startswith("select_chat_"):
-        chat_id = int(query.data.split("_")[2])
-        user_id = query.from_user.id
+    user_id = query.from_user.id
 
-        # Достаем название выбранного чата из базы
+    # 1. НОВЫЙ ХЭНДЛЕР: Обработка выбора конкретного топика (ветки)
+    if data.startswith("select_topic_"):
+        parts = data.split("_")
+        chat_id = int(parts[2])
+        raw_thread = parts[3]
+
+        thread_id = None if raw_thread == "general" else int(raw_thread)
+        is_topic = thread_id is not None
+
+        # Достаем актуальное название чата из базы
         connection = sqlite3.connect("messages.db")
         crsr = connection.cursor()
+        crsr.execute("SELECT chat_title FROM chat_members WHERE chat_id = ? AND user_id = ? LIMIT 1", (chat_id, user_id))
+        row = crsr.fetchone()
+        connection.close()
+        chat_title = row[0] if row and row[0] else f"Чат {chat_id}"
+
+        # Инициализируем настройки, если их не было
+        if user_id not in USER_SETTINGS:
+            USER_SETTINGS[user_id] = {"style": "base", "amount": "50", "dif": "1"}
+
+        # Записываем точные настройки для выбранного топика
+        USER_SETTINGS[user_id]["chat_id"] = chat_id
+        USER_SETTINGS[user_id]["chat_title"] = chat_title
+        USER_SETTINGS[user_id]["message_thread_id"] = thread_id if thread_id is not None else -1
+        USER_SETTINGS[user_id]["is_topic"] = is_topic
+
+        style = USER_SETTINGS[user_id]["style"]
+        current_style_data = STYLES_CONFIG.get(style, STYLES_CONFIG["base"])
+
+        thread_label = f" (Ветка #{thread_id})" if is_topic else " (Общий чат)"
+        menu_text = (
+            f"<b>🎙 Панель управления Сводчика</b>\n"
+            f"💬 Текущий чат: <b>{chat_title}{thread_label}</b>\n\n"
+            f"Текущий рассказчик: <b>{current_style_data['name']} ✨</b>\n"
+            f"<i>{current_style_data['desc']}</i>\n\n"
+            "Выберите глубину анализа или смените персонажа:"
+        )
+
+        reply_markup = build_main_menu_keyboard(style, USER_SETTINGS[user_id]["amount"], USER_SETTINGS[user_id]["dif"], private)
+        await query.message.edit_text(text=menu_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+        return
+
+    # 2. Обработка выбора обычного чата (или чата с проверкой на топики)
+    if data.startswith("select_chat_"):
+        chat_id = int(query.data.split("_")[2])
+
+        # 1. Проверяем в отдельной таблице chat_threads, есть ли в этом чате ветки
+        connection = sqlite3.connect("messages.db")
+        crsr = connection.cursor()
+
         crsr.execute("SELECT chat_title FROM chat_members WHERE chat_id = ? AND user_id = ? LIMIT 1",
                      (chat_id, user_id))
         row = crsr.fetchone()
-        connection.close()
-
         chat_title = row[0] if row and row[0] else f"Чат {chat_id}"
 
-        # Инициализируем или обновляем настройки пользователя
+        # Ищем уникальные ветки, исключая общую ленту (где thread_id == 0 или NULL или -1)
+        crsr.execute("""
+            SELECT DISTINCT thread_id 
+            FROM chat_threads 
+            WHERE chat_id = ? AND thread_id IS NOT NULL AND thread_id != 0 AND thread_id != -1
+        """, (chat_id,))
+        topics = [r[0] for r in crsr.fetchall()]
+        connection.close()
+
+        # 2. Если в чате ЕСТЬ ветки (топики), запрашиваем выбор ветки кнопками
+        if topics:
+            keyboard = []
+            for thread_id in topics:
+                keyboard.append([
+                    InlineKeyboardButton(
+                        f"📌 Ветка #{thread_id}",
+                        callback_data=f"select_topic_{chat_id}_{thread_id}"
+                    )
+                ])
+            # Добавляем общую ленту и кнопку возврата назад
+            keyboard.insert(0, [
+                InlineKeyboardButton("💬 Общий чат (без топиков)", callback_data=f"select_topic_{chat_id}_general")
+            ])
+            keyboard.append([InlineKeyboardButton("« Назад к чатам", callback_data="back_to_chats")])
+
+            await query.message.edit_text(
+                text=f"📂 В чате <b>{chat_title}</b> есть несколько веток. Выберите нужную:",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        # 3. Если веток нет — жестко переписываем настройки под новый чат (исправляет баг с чужим названием)
         if user_id not in USER_SETTINGS:
             USER_SETTINGS[user_id] = {"style": "base", "amount": "50", "dif": "1"}
 
@@ -657,9 +852,7 @@ async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT
             "Выберите глубину анализа или смените персонажа:"
         )
 
-        reply_markup = build_main_menu_keyboard(style, "50", "1",private)
-
-        await query.answer()
+        reply_markup = build_main_menu_keyboard(style, USER_SETTINGS[user_id]["amount"], USER_SETTINGS[user_id]["dif"], private)
         await query.message.edit_text(text=menu_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
         return
 
@@ -677,13 +870,13 @@ async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT
         return
 
     # Иначе обрабатываем логику генерации и меню сводок
-    user_id = query.from_user.id
     if user_id not in USER_SETTINGS:
         USER_SETTINGS[user_id] = {
             "style": "base", "amount": "50", "dif": "1",
             "chat_id": query.message.chat_id,
             "message_thread_id": query.message.message_thread_id if query.message.is_topic_message else -1,
-            "is_topic": query.message.is_topic_message
+            "is_topic": query.message.is_topic_message,
+            "chat_title": "Текущий чат"
         }
 
     cfg = USER_SETTINGS[user_id]
@@ -698,21 +891,22 @@ async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT
 
     if data == "back_to_main_menu":
         current_style_data = STYLES_CONFIG.get(cfg["style"], STYLES_CONFIG["base"])
-        menu_text = (
-            "<b>🎙 Панель управления Летописца</b>\n\n"
-            f"Текущий рассказчик: <b>{current_style_data['name']}</b>\n"
-            f"<i>{current_style_data['desc']}</i>\n\n"
-            "Выберите глубину анализа или смените персонажа в меню ниже:"
-        )
-        if(private):
+        if private:
             menu_text = (
                 f"<b>🎙 Панель управления Сводчика</b>\n"
-                f"💬 Текущий чат: <b>{USER_SETTINGS[user_id]["chat_title"]}</b>\n\n"
+                f"💬 Текущий чат: <b>{cfg.get('chat_title', 'Чат')}</b>\n\n"
                 f"Текущий рассказчик: <b>{current_style_data['name']} ✨</b>\n"
                 f"<i>{current_style_data['desc']}</i>\n\n"
                 "Выберите глубину анализа или смените персонажа:"
             )
-        reply_markup = build_main_menu_keyboard(cfg["style"], cfg["amount"], cfg["dif"],private)
+        else:
+            menu_text = (
+                "<b>🎙 Панель управления Летописца</b>\n\n"
+                f"Текущий рассказчик: <b>{current_style_data['name']}</b>\n"
+                f"<i>{current_style_data['desc']}</i>\n\n"
+                "Выберите глубину анализа или смените персонажа в меню ниже:"
+            )
+        reply_markup = build_main_menu_keyboard(cfg["style"], cfg["amount"], cfg["dif"], private)
         await query.edit_message_text(text=menu_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
         return
 
@@ -724,32 +918,30 @@ async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT
         cfg["style"] = new_style
 
         current_style_data = STYLES_CONFIG[new_style]
-        menu_text = (
-            "<b>🎙 Панель управления Летописца</b>\n\n"
-            f"Текущий рассказчик: <b>{current_style_data['name']}</b>\n"
-            f"<i>{current_style_data['desc']}</i>\n\n"
-            "Выберите глубину анализа или смените персонажа в меню ниже:"
-        )
-        if (private):
+        if private:
             menu_text = (
                 f"<b>🎙 Панель управления Сводчика</b>\n"
-                f"💬 Текущий чат: <b>{USER_SETTINGS[user_id]["chat_title"]}</b>\n\n"
+                f"💬 Текущий чат: <b>{cfg.get('chat_title', 'Чат')}</b>\n\n"
                 f"Текущий рассказчик: <b>{current_style_data['name']} ✨</b>\n"
                 f"<i>{current_style_data['desc']}</i>\n\n"
                 "Выберите глубину анализа или смените персонажа:"
             )
-        reply_markup = build_main_menu_keyboard(cfg["style"], cfg["amount"], cfg["dif"],private)
+        else:
+            menu_text = (
+                "<b>🎙 Панель управления Летописца</b>\n\n"
+                f"Текущий рассказчик: <b>{current_style_data['name']}</b>\n"
+                f"<i>{current_style_data['desc']}</i>\n\n"
+                "Выберите глубину анализа или смените персонажа в меню ниже:"
+            )
+        reply_markup = build_main_menu_keyboard(cfg["style"], cfg["amount"], cfg["dif"], private)
         await query.edit_message_text(text=menu_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
         return
 
-
-    # 2. НОВЫЙ ХЭНДЛЕР: Возврат к списку чатов («Назад»)
+    # Возврат к списку чатов («Назад»)
     if query.data == "back_to_chats":
-        user_id = query.from_user.id
-
         connection = sqlite3.connect("messages.db")
         crsr = connection.cursor()
-        crsr.execute("SELECT chat_id, chat_title FROM chat_members WHERE user_id = ?", (user_id,))
+        crsr.execute("SELECT DISTINCT chat_id, chat_title FROM chat_members WHERE user_id = ?", (user_id,))
         chats = crsr.fetchall()
         connection.close()
 
@@ -757,11 +949,9 @@ async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT
             await query.answer("У вас нет доступных чатов.", show_alert=True)
             return
 
-        # Формируем список чатов заново
         keyboard = [[InlineKeyboardButton(f"💬 {title or f'Чат {cid}'}", callback_data=f"select_chat_{cid}")] for
                     cid, title in chats]
 
-        await query.answer()
         await query.message.edit_text(
             "📁 <b>Выберите чат, для которого хотите получить сводку:</b>",
             reply_markup=InlineKeyboardMarkup(keyboard),
@@ -780,22 +970,23 @@ async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT
         return
 
     current_style_data = STYLES_CONFIG.get(cfg["style"], STYLES_CONFIG["base"])
-    menu_text = (
-        "<b>🎙 Панель управления Летописца</b>\n\n"
-        f"Текущий рассказчик: <b>{current_style_data['name']}</b>\n"
-        f"<i>{current_style_data['desc']}</i>\n\n"
-        "Выберите глубину анализа или смените персонажа в меню ниже:"
-    )
-    if (private):
+    if private:
         menu_text = (
             f"<b>🎙 Панель управления Сводчика</b>\n"
-            f"💬 Текущий чат: <b>{USER_SETTINGS[user_id]["chat_title"]}</b>\n\n"
+            f"💬 Текущий чат: <b>{cfg.get('chat_title', 'Чат')}</b>\n\n"
             f"Текущий рассказчик: <b>{current_style_data['name']} ✨</b>\n"
             f"<i>{current_style_data['desc']}</i>\n\n"
             "Выберите глубину анализа или смените персонажа:"
         )
+    else:
+        menu_text = (
+            "<b>🎙 Панель управления Летописца</b>\n\n"
+            f"Текущий рассказчик: <b>{current_style_data['name']}</b>\n"
+            f"<i>{current_style_data['desc']}</i>\n\n"
+            "Выберите глубину анализа или смените персонажа в меню ниже:"
+        )
 
-    reply_markup = build_main_menu_keyboard(cfg["style"], cfg["amount"], cfg["dif"],private)
+    reply_markup = build_main_menu_keyboard(cfg["style"], cfg["amount"], cfg["dif"], private)
     await query.edit_message_text(text=menu_text, reply_markup=reply_markup, parse_mode=ParseMode.HTML)
 
 async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, cfg: dict):
@@ -946,8 +1137,9 @@ async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, c
     connection.commit()
     connection.close()
 
-
-    if is_topic:
+    if private:
+        await query.message.edit_text(text=text, parse_mode=ParseMode.HTML)
+    elif is_topic:
         await query.message.edit_text(text=text, message_thread_id=message_thread_id,
                                        parse_mode=ParseMode.HTML)
     else:
@@ -1048,6 +1240,11 @@ async def save_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 VALUES (?, ?, ?, ?)
             """, (chat_id, user_id, username, chat_title))
 
+            crsr.execute("""
+                    INSERT OR IGNORE INTO chat_threads (chat_id, thread_id)
+                    VALUES (?, ?)
+                """, (chat_id, message_thread_id))
+
             connection.commit()
             connection.close()
 
@@ -1078,6 +1275,7 @@ def main():
         app.add_handler(CommandHandler("help", help_command))
         app.add_handler(CommandHandler("start", start_command))
         app.add_handler(CommandHandler("auto_summary", toggle_auto_summary))
+        app.add_handler(CommandHandler("stats", stats_command))
         app.add_handler(MessageHandler(filters.ALL, save_message))
         app.add_handler(CallbackQueryHandler(unified_callback_handler))
 

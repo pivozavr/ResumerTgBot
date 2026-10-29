@@ -44,6 +44,14 @@ def init_database():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS chat_threads (
+            chat_id INTEGER,
+            thread_id INTEGER,
+            PRIMARY KEY (chat_id, thread_id)
+        )
+    """)
+
     connection.commit()
     connection.close()
 
