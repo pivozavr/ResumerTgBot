@@ -1153,6 +1153,7 @@ async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, c
         await query.message.edit_text(text=text, parse_mode=ParseMode.HTML)
 
 
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         await update.message.reply_text(
