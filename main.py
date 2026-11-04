@@ -1104,10 +1104,13 @@ async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, c
         connection.close()
         cached_text = cached_result[0]
 
-        if is_topic:
-            return await query.message.edit_text(text=cached_text,
-                                                  message_thread_id=message_thread_id, parse_mode=ParseMode.HTML)
-        return await query.message.edit_text(text=cached_text, parse_mode=ParseMode.HTML)
+        if private:
+            await query.message.edit_text(text=cached_text, parse_mode=ParseMode.HTML)
+        elif is_topic:
+            await query.message.edit_text(text=cached_text, message_thread_id=message_thread_id,
+                                          parse_mode=ParseMode.HTML)
+        else:
+            await query.message.edit_text(text=cached_text, parse_mode=ParseMode.HTML)
 
     messages = "\n".join(
         f"{m[2]}: {decrypt(m[3])} : {m[4]}" for m in rows
