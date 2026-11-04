@@ -920,6 +920,7 @@ async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT
             await query.answer("🔒 Этот персонаж доступен только в PRO-версии чата!", show_alert=True)
             return
         cfg["style"] = new_style
+        cfg["private"] = private
 
         current_style_data = STYLES_CONFIG[new_style]
         if private:
@@ -997,6 +998,7 @@ async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, c
     chat_id = cfg["chat_id"]
     message_thread_id = cfg["message_thread_id"]
     is_topic = cfg["is_topic"]
+    private = cfg["private"]
 
     connection = sqlite3.connect("messages.db")
     crsr = connection.cursor()
@@ -1142,11 +1144,13 @@ async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, c
     connection.close()
 
 
-    if not (is_topic):
+    if private:
         await query.message.edit_text(text=text, parse_mode=ParseMode.HTML)
-    else:
+    elif is_topic:
         await query.message.edit_text(text=text, message_thread_id=message_thread_id,
                                       parse_mode=ParseMode.HTML)
+    else:
+        await query.message.edit_text(text=text, parse_mode=ParseMode.HTML)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
