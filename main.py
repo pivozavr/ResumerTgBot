@@ -3,8 +3,7 @@ import random
 from collections import Counter
 
 import ollama
-from ollama import chat, ChatResponse
-from pyrogram.filters import private
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler, CallbackQueryHandler, MessageReactionHandler
@@ -405,7 +404,11 @@ def get_chat_topics(chat_id: int) -> list:
 async def generate_with_retry(client, prompt, retries=3):
     for attempt in range(retries):
         try:
-            response = ollama.generate(model='qwen2.5', prompt=prompt)
+            response = ollama.generate(model='qwen2.5', prompt=prompt, options={
+        "num_ctx": 4096,     # Фиксируем размер контекста (меньше RAM/VRAM, выше скорость)
+        "temperature": 0.3,  # Делаем ответы более четкими и менее "галлюциногенными"
+    },
+    keep_alive="30m")
             return response.response
         except Exception as e:
             error_text = str(e)
@@ -510,14 +513,12 @@ async def scheduled_daily_summary(context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print("чето было")
     reaction_update = update.message_reaction
     if not reaction_update:
         return
 
     chat_id = reaction_update.chat.id
     user_id = reaction_update.user.id if reaction_update.user else None
-
     # Если реакцию поставил реальный пользователь (а не канал)
     if user_id:
         # Получаем имя пользователя, если оно доступно в обновлении,
@@ -528,7 +529,7 @@ async def handle_reaction(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Проверяем, добавили ли новую реакцию (а не убрали её)
         # new_reaction содержит список актуальных реакций пользователя
-        if reaction_update.new_reaction:
+        if reaction_update.new_reaction and chat_id!=user.id:
             connection = sqlite3.connect("messages.db")
             crsr = connection.cursor()
 
@@ -751,6 +752,7 @@ async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT
         raw_thread = parts[3]
 
         thread_id = None if raw_thread == "general" else int(raw_thread)
+        thread_name = parts[4]
         is_topic = thread_id is not None
 
         # Достаем актуальное название чата из базы
@@ -774,7 +776,7 @@ async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT
         style = USER_SETTINGS[user_id]["style"]
         current_style_data = STYLES_CONFIG.get(style, STYLES_CONFIG["base"])
 
-        thread_label = f" (Ветка #{thread_id})" if is_topic else " (Общий чат)"
+        thread_label = f" ({thread_name})" if is_topic else " (Общий чат)"
         menu_text = (
             f"<b>🎙 Панель управления Сводчика</b>\n"
             f"💬 Текущий чат: <b>{chat_title}{thread_label}</b>\n\n"
@@ -802,26 +804,28 @@ async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT
 
         # Ищем уникальные ветки, исключая общую ленту (где thread_id == 0 или NULL или -1)
         crsr.execute("""
-            SELECT DISTINCT thread_id 
+            SELECT DISTINCT thread_id, thread_name
             FROM chat_threads 
             WHERE chat_id = ? AND thread_id IS NOT NULL AND thread_id != 0 AND thread_id != -1
         """, (chat_id,))
-        topics = [r[0] for r in crsr.fetchall()]
+
+        topics = crsr.fetchall()
         connection.close()
+
 
         # 2. Если в чате ЕСТЬ ветки (топики), запрашиваем выбор ветки кнопками
         if topics:
             keyboard = []
-            for thread_id in topics:
+            for i in range(len(topics)):
                 keyboard.append([
                     InlineKeyboardButton(
-                        f"📌 Ветка #{thread_id}",
-                        callback_data=f"select_topic_{chat_id}_{thread_id}"
+                        f"📌 {topics[i][1]}",
+                        callback_data=f"select_topic_{chat_id}_{topics[i][0]}_{topics[i][1]}"
                     )
                 ])
             # Добавляем общую ленту и кнопку возврата назад
             keyboard.insert(0, [
-                InlineKeyboardButton("💬 Общий чат (без топиков)", callback_data=f"select_topic_{chat_id}_general")
+                InlineKeyboardButton("💬 Общий чат (без топиков)", callback_data=f"select_topic_{chat_id}_general_")
             ])
             keyboard.append([InlineKeyboardButton("« Назад к чатам", callback_data="back_to_chats")])
 
@@ -1137,13 +1141,12 @@ async def execute_resume_generation(query, context: ContextTypes.DEFAULT_TYPE, c
     connection.commit()
     connection.close()
 
-    if private:
+
+    if not (is_topic):
         await query.message.edit_text(text=text, parse_mode=ParseMode.HTML)
-    elif is_topic:
-        await query.message.edit_text(text=text, message_thread_id=message_thread_id,
-                                       parse_mode=ParseMode.HTML)
     else:
-        await query.message.edit_text(text=text, parse_mode=ParseMode.HTML)
+        await query.message.edit_text(text=text, message_thread_id=message_thread_id,
+                                      parse_mode=ParseMode.HTML)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1221,6 +1224,7 @@ async def save_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_title = chat.title
 
             message_thread_id = message.message_thread_id if message.is_topic_message else -1
+            thread_name = message.reply_to_message.forum_topic_created.name if message.is_topic_message else ""
             text = message.text  # Если у вас используется шифрование, оставьте encrypt(message.text)
             chat_id = chat.id
             date = message.date.strftime('%Y-%m-%d %H:%M:%S')
@@ -1241,9 +1245,9 @@ async def save_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """, (chat_id, user_id, username, chat_title))
 
             crsr.execute("""
-                    INSERT OR IGNORE INTO chat_threads (chat_id, thread_id)
-                    VALUES (?, ?)
-                """, (chat_id, message_thread_id))
+                INSERT OR REPLACE INTO chat_threads (chat_id, thread_id, thread_name)
+                VALUES (?, ?, ?)
+            """, (chat_id, message_thread_id, thread_name))
 
             connection.commit()
             connection.close()
