@@ -884,7 +884,7 @@ async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT
         }
 
     cfg = USER_SETTINGS[user_id]
-
+    cfg["private"] = private
     if data == "open_styles_menu":
         await query.edit_message_text(
             text="<b>🎭 Выберите рассказчика:</b>\n\nСтили с иконкой 🔒 доступны только в PRO-версии чата.",
@@ -920,7 +920,7 @@ async def unified_callback_handler(update: Update, context: ContextTypes.DEFAULT
             await query.answer("🔒 Этот персонаж доступен только в PRO-версии чата!", show_alert=True)
             return
         cfg["style"] = new_style
-        cfg["private"] = private
+
 
         current_style_data = STYLES_CONFIG[new_style]
         if private:
